@@ -11,9 +11,32 @@ const Star = require('./models/Star');
 
 const app = express();
 
-// Simple CORS configuration that works
+// CORS configuration for production domain
 app.use(cors({
-  origin: true, // Allow all origins temporarily for testing
+  origin: function (origin, callback) {
+    console.log('CORS Origin Request:', origin);
+    
+    // Allow requests with no origin (like mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001', 
+      'http://localhost:5173',
+      'https://sreevarahitemple.com',        // Production domain
+      'https://www.sreevarahitemple.com',    // With www
+      'https://varahi-temple.vercel.app'     // Keep Vercel for testing
+    ];
+    
+    // Check exact matches first
+    if (allowedOrigins.includes(origin)) {
+      console.log('CORS: Origin allowed:', origin);
+      return callback(null, true);
+    }
+    
+    console.log('CORS: Origin blocked:', origin);
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
@@ -60,8 +83,9 @@ const getBookingCount = async (poojaId, poojaDate = null) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Temple Booking API - Minimal Working Version',
-    status: 'Running successfully',
+    message: 'Temple Booking API - Production Ready',
+    status: 'Running successfully for sreevarahitemple.com',
+    frontend: 'https://sreevarahitemple.com',
     timestamp: new Date().toISOString(),
     version: '1.0.0'
   });
@@ -233,7 +257,8 @@ app.post('/api/bookings/payment-complete', async (req, res) => {
       temple: {
         name: "AALUMTHAZHAM SREE VARAHI TEMPLE",
         address: "Aalumthazham, Pathanamthitta District, Kerala - 689645",
-        phone: "+91 8304091400"
+        phone: "+91 8304091400",
+        website: "https://sreevarahitemple.com"
       },
       paymentMethod: booking.paymentMethod,
       participantNumber: booking.participantNumber,
@@ -363,10 +388,11 @@ app.use((err, req, res, next) => {
 // Start server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n🚀 TEMPLE SERVER - MINIMAL WORKING VERSION`);
+  console.log(`\n🚀 SREE VARAHI TEMPLE SERVER - PRODUCTION READY`);
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ No route parameter errors`);
-  console.log(`✅ Simple CORS configuration`);
+  console.log(`✅ Production domain: https://sreevarahitemple.com`);
+  console.log(`✅ Backend API: https://temple-server.onrender.com`);
+  console.log(`✅ Fixed booking count logic`);
+  console.log(`✅ CORS configured for production`);
   console.log(`✅ All essential endpoints working`);
-  console.log(`✅ Visit: https://temple-server.onrender.com`);
 });
