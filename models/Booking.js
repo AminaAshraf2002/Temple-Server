@@ -50,11 +50,28 @@ const bookingSchema = new mongoose.Schema({
   transactionId: {
     type: String,
     default: null
+  },
+  // NEW: Required Cashfree fields
+  orderId: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  customerId: {
+    type: String,
+    required: true
+  },
+  cashfreeOrderId: {
+    type: String
+  },
+  paymentSessionId: {
+    type: String
+  },
+  paymentCompletedAt: {
+    type: Date
   }
 }, {
   timestamps: true
 });
-
-module.exports = mongoose.model('Booking', bookingSchema);
 
 module.exports = mongoose.model('Booking', bookingSchema);
