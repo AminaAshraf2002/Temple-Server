@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const crypto = require('crypto');
-const axios = require('axios');
+const Razorpay = require('razorpay');
 require('dotenv').config();
 
 // Import models
@@ -13,24 +13,16 @@ const Star = require('./models/Star');
 
 const app = express();
 
-// Cashfree configuration
-const CASHFREE_CONFIG = {
-  clientId: process.env.CASHFREE_APP_ID,
-  clientSecret: process.env.CASHFREE_CLIENT_SECRET,
-  environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox',
-  apiVersion: '2023-08-01'
-};
+// Razorpay configuration
+const razorpayInstance = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
-// Cashfree API URLs
-const CASHFREE_BASE_URL = CASHFREE_CONFIG.environment === 'production'
-  ? 'https://api.cashfree.com/pg'
-  : 'https://sandbox.cashfree.com/pg';
-
-console.log('Cashfree Configuration:');
-console.log('Environment:', CASHFREE_CONFIG.environment);
-console.log('Client ID:', CASHFREE_CONFIG.clientId ? `${CASHFREE_CONFIG.clientId.substring(0, 10)}...` : 'Missing');
-console.log('Client Secret:', CASHFREE_CONFIG.clientSecret ? 'Configured' : 'Missing');
-console.log('API Base URL:', CASHFREE_BASE_URL);
+console.log('Razorpay Configuration:');
+console.log('Environment:', process.env.NODE_ENV);
+console.log('Key ID:', process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 15)}...` : 'Missing');
+console.log('Key Secret:', process.env.RAZORPAY_KEY_SECRET ? 'Configured' : 'Missing');
 
 // CORS configuration
 app.use(cors({
@@ -42,7 +34,7 @@ app.use(cors({
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
-      'http://localhost:5174',
+      'http://localhost:5173',
       'https://sreevarahitemple.com',
       'https://www.sreevarahitemple.com',
       'https://varahi-temple.vercel.app'
@@ -103,43 +95,15 @@ const getBookingCount = async (poojaId, poojaDate = null) => {
   }
 };
 
-// Direct Cashfree API function
-const createCashfreeOrder = async (orderData) => {
-  try {
-    const url = `${CASHFREE_BASE_URL}/orders`;
 
-    const headers = {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'x-client-id': CASHFREE_CONFIG.clientId,
-      'x-client-secret': CASHFREE_CONFIG.clientSecret,
-      'x-api-version': CASHFREE_CONFIG.apiVersion
-    };
-
-    console.log('Making direct API call to Cashfree...');
-    console.log('URL:', url);
-    console.log('Headers:', { ...headers, 'x-client-secret': '[HIDDEN]' });
-    console.log('Order Data:', JSON.stringify(orderData, null, 2));
-
-    const response = await axios.post(url, orderData, { headers });
-
-    console.log('Cashfree API Response Status:', response.status);
-    console.log('Cashfree API Response Data:', JSON.stringify(response.data, null, 2));
-
-    return response.data;
-  } catch (error) {
-    console.error('Direct Cashfree API Error:', error.response?.data || error.message);
-    throw error;
-  }
-};
 
 // Root route
 app.get('/', (req, res) => {
   res.json({
     message: 'Enhanced Temple Booking API with Direct Cashfree HTTP Integration',
     status: 'Running successfully',
-    paymentGateway: 'Cashfree (Direct HTTP API)',
-    environment: CASHFREE_CONFIG.environment,
+    paymentGateway: 'Razorpay LIVE',
+    environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString(),
     version: '4.0.0 - Enhanced with Descriptions',
     features: [
@@ -159,10 +123,9 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    cashfree: {
-      configured: !!(CASHFREE_CONFIG.clientId && CASHFREE_CONFIG.clientSecret),
-      environment: CASHFREE_CONFIG.environment,
-      apiUrl: CASHFREE_BASE_URL
+    razorpay: {
+      configured: !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+      environment: process.env.NODE_ENV
     },
     timestamp: new Date().toISOString()
   });
@@ -498,82 +461,52 @@ app.post('/api/bookings', async (req, res) => {
 
     await booking.save();
 
-    // Check if Cashfree is configured
-    if (!CASHFREE_CONFIG.clientId || !CASHFREE_CONFIG.clientSecret) {
-      console.log('Cashfree not configured, using manual mode');
-      return res.status(201).json({
-        status: 'success',
-        message: 'Booking created. Manual payment mode.',
-        bookingId: booking._id.toString(),
-        orderId: orderId,
-        receiptNumber: booking.receiptNumber,
-        amount: pooja.amount,
-        customerId: customerId,
-        paymentMode: 'manual',
-        poojaCategory: pooja.category,
-        bookingRequirements: pooja.getBookingRequirements ? pooja.getBookingRequirements() : [],
-        participantLimit: pooja.maxParticipants || 'unlimited'
-      });
-    }
-
+    // Create Razorpay order
     try {
-      // Create Cashfree order using direct HTTP API
-      const orderRequest = {
-        order_id: orderId,
-        order_amount: pooja.amount,
-        order_currency: 'INR',
-        customer_details: {
-          customer_id: customerId,
-          customer_name: devoteName.trim(),
-          customer_email: 'devotee@temple.com',
-          customer_phone: '9999999999'
-        },
-        order_meta: {
-          return_url: `${req.protocol}://${req.get('host')}/payment-return?order_id={order_id}`,
-          notify_url: `${req.protocol}://${req.get('host')}/api/webhooks/cashfree`
-        },
-        order_note: `Enhanced Pooja booking: ${pooja.poojaEnglish} for ${devoteName.trim()}`
+      const razorpayOrderOptions = {
+        amount: pooja.amount * 100, // Amount in paise
+        currency: 'INR',
+        receipt: receiptNumber,
+        notes: {
+          poojaId: pooja.id,
+          poojaName: pooja.poojaEnglish,
+          devoteName: devoteName.trim(),
+          star: star
+        }
       };
 
-      const cashfreeResponse = await createCashfreeOrder(orderRequest);
+      console.log('Creating Razorpay order:', razorpayOrderOptions);
+      const razorpayOrder = await razorpayInstance.orders.create(razorpayOrderOptions);
+      console.log('Razorpay order created:', razorpayOrder.id);
 
-      // Update booking with Cashfree details
-      booking.cashfreeOrderId = cashfreeResponse.cf_order_id;
-      booking.paymentSessionId = cashfreeResponse.payment_session_id;
+      // Update booking with Razorpay details
+      booking.orderId = razorpayOrder.id;
+      booking.razorpayOrderId = razorpayOrder.id;
       await booking.save();
-
-      console.log('Cashfree order created successfully for enhanced pooja');
+      console.log('Razorpay order created successfully for enhanced pooja');
 
       res.status(201).json({
         status: 'success',
         message: 'Booking created. Please complete payment.',
         bookingId: booking._id.toString(),
-        orderId: orderId,
-        cashfreeOrderId: cashfreeResponse.cf_order_id,
-        paymentSessionId: cashfreeResponse.payment_session_id,
+        razorpayOrderId: razorpayOrder.id,
+        razorpayKeyId: process.env.RAZORPAY_KEY_ID,
         receiptNumber: booking.receiptNumber,
         amount: pooja.amount,
-        customerId: customerId,
-        paymentMode: 'cashfree',
+        amountInPaise: pooja.amount * 100,
+        paymentMode: 'razorpay',
         poojaType: pooja.category,
         bookingRequirements: pooja.getBookingRequirements ? pooja.getBookingRequirements() : [],
         participantLimit: pooja.maxParticipants || 'unlimited'
       });
 
-    } catch (cashfreeError) {
-      console.error('Cashfree order creation failed:', cashfreeError.message);
+    } catch (razorpayError) {
+      console.error('Razorpay order creation failed:', razorpayError.message);
 
-      res.status(201).json({
-        status: 'success',
-        message: 'Booking created. Manual payment mode due to gateway error.',
-        bookingId: booking._id.toString(),
-        orderId: orderId,
-        receiptNumber: booking.receiptNumber,
-        amount: pooja.amount,
-        customerId: customerId,
-        paymentMode: 'manual',
-        error: cashfreeError.message,
-        poojaCategory: pooja.category,
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to create payment order',
+        error: razorpayError.message,
         participantLimit: pooja.maxParticipants || 'unlimited'
       });
     }
@@ -588,18 +521,39 @@ app.post('/api/bookings', async (req, res) => {
   }
 });
 
-// POST /api/bookings/payment-complete
-app.post('/api/bookings/payment-complete', async (req, res) => {
+// POST /api/bookings/verify-payment
+app.post('/api/bookings/verify-payment', async (req, res) => {
   try {
-    const { bookingId, cashfreePaymentId, orderId, paymentStatus } = req.body;
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      bookingId
+    } = req.body;
 
-    if (!bookingId) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
         status: 'error',
-        message: 'Booking ID is required'
+        message: 'Missing payment verification parameters'
       });
     }
 
+    // Verify signature
+    const generated_signature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+
+    if (generated_signature !== razorpay_signature) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Payment verification failed - Invalid signature'
+      });
+    }
+
+    console.log('Payment signature verified successfully');
+
+    // Update booking
     const booking = await Booking.findById(bookingId);
     if (!booking) {
       return res.status(404).json({
@@ -608,18 +562,17 @@ app.post('/api/bookings/payment-complete', async (req, res) => {
       });
     }
 
-    // Update booking status
     booking.paymentStatus = 'completed';
-    booking.transactionId = cashfreePaymentId || `manual_${Date.now()}`;
+    booking.transactionId = razorpay_payment_id;
+    booking.razorpaySignature = razorpay_signature;
     booking.paymentCompletedAt = new Date();
     await booking.save();
 
     console.log(`Payment completed for booking ${booking._id}`);
 
-    // Get enhanced pooja details for receipt
+    // Get pooja details for receipt
     const pooja = await Pooja.findOne({ id: booking.poojaId });
 
-    // Prepare enhanced receipt data
     const receiptData = {
       receiptNumber: booking.receiptNumber,
       date: new Date().toLocaleDateString('en-IN'),
@@ -632,9 +585,7 @@ app.post('/api/bookings/payment-complete', async (req, res) => {
         malayalam: booking.pooja,
         date: booking.poojaDate,
         amount: booking.amount,
-        category: pooja?.category || 'regular',
-        description: pooja?.descriptionEnglish || null,
-        bookingRequirements: pooja?.getBookingRequirements ? pooja.getBookingRequirements() : []
+        category: pooja?.category || 'regular'
       },
       temple: {
         name: "AALUMTHAZHAM SREE VARAHI TEMPLE",
@@ -646,40 +597,60 @@ app.post('/api/bookings/payment-complete', async (req, res) => {
         paymentMethod: booking.paymentMethod,
         participantNumber: booking.participantNumber,
         transactionId: booking.transactionId,
-        orderId: booking.orderId,
+        orderId: booking.razorpayOrderId,
         bookingId: booking._id.toString()
       }
     };
 
     res.json({
       status: 'success',
-      message: 'Payment completed successfully',
+      message: 'Payment verified and completed successfully',
       receiptData: receiptData
     });
 
   } catch (error) {
-    console.error('Payment completion error:', error);
+    console.error('Payment verification error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to complete payment',
+      message: 'Failed to verify payment',
       error: error.message
     });
   }
 });
 
-// Cashfree Webhook endpoint
-app.post('/api/webhooks/cashfree', async (req, res) => {
+
+
+// Razorpay Webhook endpoint
+app.post('/api/webhooks/razorpay', async (req, res) => {
   try {
-    console.log('Cashfree webhook received:', req.body);
+    const webhookSignature = req.headers['x-razorpay-signature'];
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    const { orderId, paymentStatus, cashfreePaymentId } = req.body;
+    if (webhookSecret) {
+      const expectedSignature = crypto
+        .createHmac('sha256', webhookSecret)
+        .update(JSON.stringify(req.body))
+        .digest('hex');
 
-    if (paymentStatus === 'SUCCESS') {
-      const booking = await Booking.findOne({ orderId: orderId });
+      if (webhookSignature !== expectedSignature) {
+        return res.status(400).json({ status: 'Invalid signature' });
+      }
+    }
+
+    const event = req.body.event;
+    const payload = req.body.payload.payment.entity;
+
+    console.log('Razorpay webhook received:', event);
+
+    if (event === 'payment.captured') {
+      const orderId = payload.order_id;
+      const paymentId = payload.id;
+
+      const booking = await Booking.findOne({ razorpayOrderId: orderId });
 
       if (booking && booking.paymentStatus === 'pending') {
         booking.paymentStatus = 'completed';
-        booking.transactionId = cashfreePaymentId;
+        booking.transactionId = paymentId;
         booking.paymentCompletedAt = new Date();
         await booking.save();
 
@@ -1249,10 +1220,12 @@ app.use((err, req, res, next) => {
 // Start server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n🕉️  ENHANCED SREE VARAHI TEMPLE SERVER STARTED`);
+  console.log(`\n🕉️  SREE VARAHI TEMPLE SERVER - RAZORPAY LIVE`);
   console.log(`Server running on port ${PORT}`);
-  console.log(`Payment Gateway: Cashfree (Direct HTTP API)`);
-  console.log(`Environment: ${CASHFREE_CONFIG.environment}`);
+  console.log(`Payment Gateway: Razorpay LIVE`);
+  console.log(`Environment: ${process.env.NODE_ENV}`);
+  console.log(`\n✅ Razorpay Live Keys Configured`);
+  console.log(`Ready to accept live payments! 🙏\n`);
   console.log(`Database: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting...'}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`API docs: http://localhost:${PORT}/`);
